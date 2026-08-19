@@ -26,6 +26,7 @@ dependencies = [
 dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
+    "ruff>=0.9.0",
 ]
 # 可选依赖
 ext = [
@@ -56,3 +57,17 @@ testpaths = ["quant/tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "C4", "RUF"]
+ignore = [
+    "E501",  # 行长度由 ruff format 统一处理，避免长字符串/注释误报
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
