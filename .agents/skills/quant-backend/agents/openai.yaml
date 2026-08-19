@@ -1,0 +1,3 @@
+interface:
+  display_name: "Quant Backend"
+  short_description: "量化后端开发规范：分层约束、Python 代码风格、回测风控数据链路与测试要求"
