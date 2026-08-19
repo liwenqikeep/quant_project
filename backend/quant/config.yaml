@@ -1,0 +1,75 @@
+# ========== 量化项目配置 ==========
+
+# 数据配置
+data:
+  # 数据存储路径
+  raw_data_path: "data/raw"
+  processed_data_path: "data/processed"
+  
+  # 数据源配置
+  sources:
+    default: "akshare"  # 默认数据源
+    akshare:
+      enabled: true
+    tushare:
+      enabled: false
+      token: "your_token_here"  # 请填入你的Tushare Token
+  
+  # 默认股票池
+  stock_pool:
+    - "000001.SZ"  # 平安银行
+    - "000002.SZ"  # 万科A
+    - "600000.SH"  # 浦发银行
+    - "600519.SH"  # 贵州茅台
+
+# 策略配置
+strategy:
+  # 初始资金
+  initial_cash: 1000000
+  
+  # 交易费用
+  commission: 0.0003        # 万三佣金
+  stamp_tax: 0.0005         # 万分之五印花税（卖出时收取，2023年8月起生效）
+  slippage: 0.0             # 滑点（bps，买入上浮、卖出下浮，默认0）
+  min_commission: 5.0      # 最低佣金（元，A股默认5元）
+  min_commission_enabled: true  # 是否启用最低佣金
+  
+  # 执行价格策略
+  # "next_open": 次日开盘价执行（推荐，消除未来函数）
+  # "next_close": 次日收盘价执行（更保守）
+  execution_price: "next_open"
+  
+  # 回测时间范围
+  backtest_start: "20200101"
+  backtest_end: "20231231"
+
+# 模型配置
+model:
+  # 模型保存路径
+  model_path: "models"
+  
+  # 特征配置
+  features:
+    technical:
+      - "MA5"
+      - "MA10"
+      - "MA20"
+      - "RSI"
+      - "MACD"
+      - "BOLL"
+    fundamental:
+      - "pe_ratio"
+      - "pb_ratio"
+      - "turnover_rate"
+  
+  # 训练配置
+  train:
+    test_size: 0.2
+    random_state: 42
+
+# 日志配置
+logging:
+  level: "INFO"
+  log_dir: "logs"
+  rotation: "100 MB"
+  retention: "30 days"
