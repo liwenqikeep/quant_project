@@ -1,10 +1,13 @@
-# ========== 量化项目配置 ==========
+﻿# ========== 量化项目配置 ==========
 
 # 数据配置
 data:
-  # 数据存储路径
-  raw_data_path: "data/raw"
-  processed_data_path: "data/processed"
+  # 数据存储根目录（可配置为绝对路径，或相对 backend 运行目录的相对路径）
+  # 数据子目录：tmp=临时缓存 / raw=原始数据 / processed=处理后数据
+  data_dir: "d:/desk/code/personal/data"
+  tmp_dir: "tmp"
+  raw_dir: "raw"
+  processed_dir: "processed"
   
   # 数据源配置
   sources:

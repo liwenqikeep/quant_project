@@ -272,7 +272,7 @@ class PositionLimitManager:
         
         return allowed, reason
     
-    def get_rebalance建议(
+    def get_rebalance_suggestions(
         self,
         target_positions: Dict[str, float]
     ) -> List[Dict]:

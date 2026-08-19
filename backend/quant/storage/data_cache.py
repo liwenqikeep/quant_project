@@ -1,4 +1,4 @@
-"""
+﻿"""
 数据缓存模块
 内存缓存、磁盘缓存、LRU策略、过期管理
 """
@@ -12,6 +12,7 @@ import json
 import hashlib
 import pickle
 import time
+import sys
 from quant.utils.logger import logger
 
 
@@ -43,7 +44,7 @@ class DataCache:
     def __init__(
         self,
         max_memory_mb: float = 500,
-        cache_dir: str = "data/cache",
+        cache_dir: Optional[str] = None,
         default_ttl: int = 3600,
         enable_disk_cache: bool = True
     ):
@@ -65,6 +66,9 @@ class DataCache:
         self._current_memory_size = 0
         
         # 磁盘缓存
+        if cache_dir is None:
+            from quant.utils.paths import get_data_paths
+            cache_dir = get_data_paths()['tmp'] / 'cache'
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         

@@ -3,7 +3,7 @@
 """
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Optional, Any, Literal
+from typing import Dict, List, Optional, Any, Literal, Callable
 from pathlib import Path
 from quant.utils.logger import logger
 
@@ -21,7 +21,8 @@ class Backtester:
         min_commission_enabled: bool = None,
         execution_price: Literal["next_open", "next_close"] = None,
         config: Dict[str, Any] = None,
-        auto_load_config: bool = True
+        auto_load_config: bool = True,
+        risk_hook: Optional[Callable] = None
     ):
         """
         初始化回测引擎
@@ -36,6 +37,9 @@ class Backtester:
             execution_price: 执行价格策略，"next_open"次日开盘（推荐）,"next_close"次日收盘
             config: 配置字典，支持嵌套键如 "strategy.initial_cash"
             auto_load_config: 是否自动从 config.yaml 加载配置
+            risk_hook: 风控钩子函数，签名为 `func(signal, context) -> (modified_signal, allow_trade, reason)`
+                   context 包含: date, cash, position, total_value, position_value
+                   返回: (修改后的信号, 是否允许交易, 拒绝原因)
         """
         # 优先使用传入参数，其次从配置读取，最后使用默认值
         if config is not None:
@@ -76,10 +80,11 @@ class Backtester:
             self.execution_price = execution_price if execution_price is not None else "next_open"
 
         self.config = config
-
+        self.risk_hook = risk_hook
+        
         self.reset()
 
-        logger.info(f"回测引擎初始化: 初始资金={self.initial_cash}, 佣金={self.commission}, 印花税={self.stamp_tax}, 滑点={self.slippage}, 最低佣金={self.min_commission if self.min_commission_enabled else '禁用'}, 执行价={self.execution_price}")
+        logger.info(f"回测引擎初始化: 初始资金={self.initial_cash}, 佣金={self.commission}, 印花税={self.stamp_tax}, 滑点={self.slippage}, 最低佣金={self.min_commission if self.min_commission_enabled else '禁用'}, 执行价={self.execution_price}, 风控钩子={'已启用' if risk_hook else '未启用'}")
 
     @staticmethod
     def _get_config_value(config: Dict, key: str, default: Any) -> Any:
@@ -104,6 +109,7 @@ class Backtester:
         
         self.trades = []  # 交易记录
         self.equity_curve = []  # 权益曲线
+        self.risk_rejections = []  # 风控拒绝记录
         
     def _apply_slippage(self, price: float, side: str) -> float:
         """
@@ -263,11 +269,34 @@ class Backtester:
             
             # 获取执行价格
             if pd.notna(signal) and signal != 0:
-                if self.execution_price == "next_open" and "open" in df.columns:
-                    exec_price = row["open"]
-                else:
-                    exec_price = row["close"]
-                self.execute_trade(idx, exec_price, int(signal), position_size)
+                # 应用风控钩子
+                if self.risk_hook is not None:
+                    context = {
+                        "date": idx,
+                        "cash": self.cash,
+                        "position": self.position,
+                        "total_value": self.total_value,
+                        "position_value": self.position_value
+                    }
+                    modified_signal, allow_trade, reason = self.risk_hook(int(signal), context)
+                    
+                    if not allow_trade:
+                        self.risk_rejections.append({
+                            "date": idx,
+                            "signal": int(signal),
+                            "reason": reason
+                        })
+                        logger.info(f"风控拒绝: {idx}, 信号={int(signal)}, 原因={reason}")
+                        continue
+                    
+                    signal = modified_signal
+                
+                if signal != 0:
+                    if self.execution_price == "next_open" and "open" in df.columns:
+                        exec_price = row["open"]
+                    else:
+                        exec_price = row["close"]
+                    self.execute_trade(idx, exec_price, int(signal), position_size)
             
             # 更新持仓市值（使用收盘价）
             self.position_value = self.position * row["close"]
@@ -403,7 +432,8 @@ class Backtester:
             "win_rate": win_rate,
             "total_trades": total_trades,
             "equity_curve": equity_df,
-            "trades": trades_df
+            "trades": trades_df,
+            "risk_rejections": self.risk_rejections
         }
     
     def plot_results(self, save_path: Optional[str] = None):

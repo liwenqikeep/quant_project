@@ -111,12 +111,22 @@ class TradeLogger:
         )
     
     def _calculate_commission(self, amount: float, side: str) -> float:
-        """计算手续费"""
+        """
+        计算手续费（与回测器口径一致）
+        
+        Args:
+            amount: 成交金额
+            side: 交易方向
+        
+        Returns:
+            总手续费
+        """
         commission = amount * 0.0003  # 万三佣金
         commission = max(5.0, commission)  # 最低5元
         
+        # A股买入不收印花税，只在卖出时收取万分之五
         if side.lower() == "sell":
-            commission += amount * 0.001  # 千一印花税
+            commission += amount * 0.0005
         
         return commission
     

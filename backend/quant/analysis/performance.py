@@ -226,10 +226,14 @@ class PerformanceAnalyzer:
         annual_return: float,
         max_drawdown: float
     ) -> float:
-        """计算卡玛比率"""
+        """
+        计算卡玛比率
+        
+        注意：max_drawdown 应为负值，此处取绝对值计算
+        """
         if max_drawdown == 0:
             return 0
-        return annual_return / max_drawdown
+        return annual_return / abs(max_drawdown)
     
     def _calculate_trade_metrics(self, trades: List[Dict]) -> Dict:
         """计算交易指标"""

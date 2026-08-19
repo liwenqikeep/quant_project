@@ -36,13 +36,16 @@ class NewsItem:
 class NewsCollector:
     """新闻采集器"""
     
-    def __init__(self, cache_dir: str = "data/news"):
+    def __init__(self, cache_dir: Optional[str] = None):
         """
         初始化新闻采集器
         
         Args:
             cache_dir: 缓存目录
         """
+        if cache_dir is None:
+            from quant.utils.paths import get_data_paths
+            cache_dir = get_data_paths()["tmp"] / "news"
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         

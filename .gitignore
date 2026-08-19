@@ -8,19 +8,23 @@ env/
 venv/
 .venv/
 ENV/
+build/
+dist/
+*.egg-info/
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+*~
 
 # Jupyter
 .ipynb_checkpoints/
 
 # Logs
-*.log
 logs/
+*.log
 
 # Data
 data/raw/
@@ -29,7 +33,9 @@ data/processed/
 *.csv
 
 # Models
+models/
 *.pkl
+*.joblib
 *.h5
 *.pth
 
@@ -42,7 +48,6 @@ Thumbs.db
 .coverage
 htmlcov/
 
-# Build
-dist/
-build/
-*.egg-info/
+# Database
+*.db
+*.sqlite

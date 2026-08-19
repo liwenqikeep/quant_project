@@ -298,7 +298,7 @@ class SimulatedBroker(BrokerAdapter):
             side=order.side,
             price=fill_price,
             quantity=order.quantity,
-            commission=self._calculate_commission(fill_price * order.quantity),
+            commission=self._calculate_commission(fill_price * order.quantity, side=order.side.value),
             trade_time=datetime.now()
         )
         
@@ -326,13 +326,23 @@ class SimulatedBroker(BrokerAdapter):
             f"数量={order.quantity}, 手续费={trade.commission:.2f}"
         )
     
-    def _calculate_commission(self, trade_value: float) -> float:
-        """计算手续费"""
+    def _calculate_commission(self, trade_value: float, side: str = "buy") -> float:
+        """
+        计算手续费（与回测器口径一致）
+        
+        Args:
+            trade_value: 成交金额
+            side: 交易方向，"buy" 或 "sell"
+        
+        Returns:
+            总手续费
+        """
         commission = trade_value * 0.0003  # 万三佣金
         commission = max(5.0, commission)   # 最低5元
         
-        if trade_value > 0:
-            stamp_tax = trade_value * 0.001  # 千一印花税（仅卖出）
+        # A股买入不收印花税，只在卖出时收取
+        if side.lower() == "sell":
+            stamp_tax = trade_value * 0.0005  # 万分之五印花税
             commission += stamp_tax
         
         return commission

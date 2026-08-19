@@ -119,7 +119,10 @@ if SQLALCHEMY_AVAILABLE:
 class SimpleDatabase:
     """简化版数据库（使用JSON文件存储）"""
     
-    def __init__(self, db_path: str = "data/database"):
+    def __init__(self, db_path: Optional[str] = None):
+        if db_path is None:
+            from quant.utils.paths import get_data_paths
+            db_path = get_data_paths()["processed"] / "database"
         self.db_path = Path(db_path)
         self.db_path.mkdir(parents=True, exist_ok=True)
         self.stock_data_file = self.db_path / "stock_data.json"
@@ -229,7 +232,7 @@ class SimpleDatabase:
 class Database:
     """数据库封装类"""
     
-    def __init__(self, db_url: str = "sqlite:///data/quant.db"):
+    def __init__(self, db_url: Optional[str] = None):
         """
         初始化数据库
         
@@ -239,9 +242,15 @@ class Database:
         self.db_url = db_url
         self.engine = None
         self.session_factory = None
+        self.simple_db = None  # 显式初始化，避免 AttributeError
         
         if SQLALCHEMY_AVAILABLE:
             try:
+                if db_url is None:
+                    from quant.utils.paths import get_data_paths
+                    db_url = f"sqlite:///{get_data_paths()['processed'].as_posix()}/quant.db"
+                    self.db_url = db_url
+                
                 self.engine = create_engine(
                     db_url,
                     echo=False,
@@ -263,11 +272,13 @@ class Database:
         self.simple_db = SimpleDatabase()
         logger.info("使用简化版数据库")
     
-    def get_session(self) -> Session:
+    def get_session(self):
         """获取数据库会话"""
-        if self.simple_db:
+        if self.simple_db is not None:
             return self.simple_db
-        return self.session_factory()
+        if self.session_factory is not None:
+            return self.session_factory()
+        raise RuntimeError("数据库未初始化")
     
     def save_stock_data(self, symbol: str, df: pd.DataFrame):
         """保存股票数据"""

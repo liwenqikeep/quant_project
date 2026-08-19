@@ -19,13 +19,16 @@ except ImportError:
 class TradingCalendar:
     """交易日历"""
     
-    def __init__(self, data_dir: str = "data/calendar"):
+    def __init__(self, data_dir: Optional[str] = None):
         """
         初始化交易日历
         
         Args:
             data_dir: 数据存储目录
         """
+        if data_dir is None:
+            from quant.utils.paths import get_data_paths
+            data_dir = get_data_paths()["raw"] / "calendar"
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         

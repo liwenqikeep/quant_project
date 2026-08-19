@@ -1,4 +1,4 @@
-"""
+﻿"""
 配置管理模块
 支持YAML/JSON配置、动态配置更新、配置验证
 """
@@ -55,8 +55,28 @@ class ConfigManager:
         
         logger.info(f"配置管理器初始化: 文件={config_file}, 自动保存={auto_save}")
     
+    def _validate_required_keys(self):
+        """验证必填配置键"""
+        required_keys = [
+            "strategy.initial_cash",
+            "strategy.commission",
+            "strategy.stamp_tax",
+            "data.raw_data_path",
+            "data.processed_data_path"
+        ]
+        
+        missing = []
+        for key in required_keys:
+            if self.get(key) is None:
+                missing.append(key)
+        
+        if missing:
+            logger.warning(f"配置缺失必填键: {missing}")
+        
+        return missing
+    
     def _init_default_config(self):
-        """初始化默认配置"""
+        """初始化默认配置（与 config.yaml 一致）"""
         self.config = {
             "system": {
                 "name": "量化交易系统",
@@ -66,17 +86,27 @@ class ConfigManager:
             "data": {
                 "raw_data_path": "data/raw",
                 "processed_data_path": "data/processed",
-                "cache_enabled": True,
-                "cache_ttl": 3600
+                "sources": {
+                    "default": "akshare",
+                    "akshare": {"enabled": True},
+                    "tushare": {"enabled": False, "token": ""}
+                }
             },
             "strategy": {
                 "initial_cash": 1000000,
                 "commission": 0.0003,
-                "stamp_tax": 0.001,
+                "stamp_tax": 0.0005,
+                "slippage": 0.0,
+                "min_commission": 5.0,
+                "min_commission_enabled": True,
+                "execution_price": "next_open",
                 "backtest_start": "20200101",
                 "backtest_end": "20231231"
             },
             "risk": {
+                "commission": 0.0003,
+                "stamp_tax": 0.0005,
+                "slippage": 0.0,
                 "max_position_per_stock": 0.2,
                 "max_position_total": 0.9,
                 "max_drawdown": 0.15,
@@ -88,6 +118,9 @@ class ConfigManager:
                 "debug": False
             }
         }
+        
+        # 加载后验证必填配置
+        self._validate_required_keys()
     
     def load_config(self, config_file: str) -> bool:
         """加载配置文件"""
@@ -108,6 +141,7 @@ class ConfigManager:
                     return False
             
             self.config_file = config_file
+            self._validate_required_keys()
             logger.info(f"配置文件已加载: {config_file}")
             return True
             
