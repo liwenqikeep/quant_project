@@ -61,8 +61,10 @@ class ConfigManager:
             "strategy.initial_cash",
             "strategy.commission",
             "strategy.stamp_tax",
-            "data.raw_data_path",
-            "data.processed_data_path"
+            "data.data_dir",
+            "data.tmp_dir",
+            "data.raw_dir",
+            "data.processed_dir"
         ]
         
         missing = []
@@ -72,11 +74,13 @@ class ConfigManager:
         
         if missing:
             logger.warning(f"配置缺失必填键: {missing}")
+        else:
+            logger.info("配置必填键校验通过")
         
         return missing
     
     def _init_default_config(self):
-        """初始化默认配置（与 config.yaml 一致）"""
+        """初始化默认配置（与 config.yaml 结构一致）"""
         self.config = {
             "system": {
                 "name": "量化交易系统",
@@ -84,8 +88,10 @@ class ConfigManager:
                 "log_level": "INFO"
             },
             "data": {
-                "raw_data_path": "data/raw",
-                "processed_data_path": "data/processed",
+                "data_dir": "data",
+                "tmp_dir": "tmp",
+                "raw_dir": "raw",
+                "processed_dir": "processed",
                 "sources": {
                     "default": "akshare",
                     "akshare": {"enabled": True},
@@ -119,7 +125,7 @@ class ConfigManager:
             }
         }
         
-        # 加载后验证必填配置
+        # 验证必填配置
         self._validate_required_keys()
     
     def load_config(self, config_file: str) -> bool:

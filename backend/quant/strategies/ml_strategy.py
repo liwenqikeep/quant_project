@@ -8,11 +8,10 @@ from typing import Optional
 from pathlib import Path
 import pickle
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import classification_report, accuracy_score
 from sklearn.preprocessing import StandardScaler
 
-from pathlib import Path
 from quant.strategies.base_strategy import BaseStrategy
 from quant.utils.logger import logger
 
@@ -102,8 +101,7 @@ class MLStrategy(BaseStrategy):
     def train(
         self, 
         df: pd.DataFrame,
-        test_size: float = 0.2,
-        tune_hyperparams: bool = False
+        test_size: float = 0.2
     ) -> dict:
         """
         训练模型
@@ -111,7 +109,6 @@ class MLStrategy(BaseStrategy):
         Args:
             df: 训练数据
             test_size: 测试集比例
-            tune_hyperparams: 是否调参
         
         Returns:
             训练结果字典

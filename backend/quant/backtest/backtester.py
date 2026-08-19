@@ -22,7 +22,8 @@ class Backtester:
         execution_price: Literal["next_open", "next_close"] = None,
         config: Dict[str, Any] = None,
         auto_load_config: bool = True,
-        risk_hook: Optional[Callable] = None
+        risk_hook: Optional[Callable] = None,
+        symbol: str = ""
     ):
         """
         初始化回测引擎
@@ -40,7 +41,9 @@ class Backtester:
             risk_hook: 风控钩子函数，签名为 `func(signal, context) -> (modified_signal, allow_trade, reason)`
                    context 包含: date, cash, position, total_value, position_value
                    返回: (修改后的信号, 是否允许交易, 拒绝原因)
+            symbol: 交易标的代码（用于交易记录）
         """
+        self.symbol = symbol
         # 优先使用传入参数，其次从配置读取，最后使用默认值
         if config is not None:
             self.initial_cash = initial_cash if initial_cash is not None else self._get_config_value(config, "strategy.initial_cash", 1000000)
@@ -164,11 +167,13 @@ class Backtester:
         """
         trade = {
             "date": date,
+            "symbol": self.symbol,
             "price": price,
             "signal": signal,
             "side": None,  # "buy" / "sell"
             "shares": 0,
             "trade_value": 0,
+            "amount": 0,  # 成交金额（用于报告）
             "commission": 0,
             "stamp_tax": 0,
             "total_cost": 0,  # 总成本（买入）或总收入（卖出）
@@ -198,6 +203,7 @@ class Backtester:
                 trade["side"] = "buy"
                 trade["shares"] = shares
                 trade["trade_value"] = trade_value
+                trade["amount"] = trade_value
                 trade["commission"] = commission
                 trade["stamp_tax"] = stamp_tax
                 trade["total_cost"] = total_cost
@@ -223,6 +229,7 @@ class Backtester:
             trade["side"] = "sell"
             trade["shares"] = shares
             trade["trade_value"] = trade_value
+            trade["amount"] = trade_value
             trade["commission"] = commission
             trade["stamp_tax"] = stamp_tax
             trade["total_cost"] = -total_proceed  # 负数表示收入
@@ -366,58 +373,87 @@ class Backtester:
         equity_df["drawdown"] = (equity_df["total_value"] - equity_df["peak"]) / equity_df["peak"]
         max_drawdown = equity_df["drawdown"].min()  # 已经是负值
         
-        # 夏普比率
+        # 夏普比率（统一口径：扣除 3% 无风险利率）
         if len(equity_df) > 1:
             returns = equity_df["total_value"].pct_change().dropna()
-            if returns.std() != 0:
-                sharpe_ratio = returns.mean() / returns.std() * np.sqrt(252)
+            if len(returns) > 0 and returns.std() != 0:
+                annual_return = returns.mean() * 252
+                volatility = returns.std() * np.sqrt(252)
+                risk_free_rate = 0.03  # 统一使用 3% 无风险利率
+                sharpe_ratio = (annual_return - risk_free_rate) / volatility
             else:
                 sharpe_ratio = 0
         else:
             sharpe_ratio = 0
         
-        # 胜率 - 使用配对平仓法（按完整买卖对计算）
+        # 年化波动率
+        if len(equity_df) > 1:
+            returns = equity_df["total_value"].pct_change().dropna()
+            volatility = returns.std() * np.sqrt(252) if len(returns) > 0 else 0
+        else:
+            volatility = 0
+        
+        # 卡玛比率
+        if max_drawdown != 0:
+            calmar_ratio = annual_return / abs(max_drawdown)
+        else:
+            calmar_ratio = 0
+        
+        # 盈亏比和平均持仓天数
         if len(trades_df) > 0:
             completed_pairs = 0
             winning_pairs = 0
-            entry_stack = []  # 买入栈，记录 (price, shares)
+            total_profit = 0
+            total_loss = 0
+            holding_days = []
+            entry_stack = []
 
             for _, trade in trades_df.iterrows():
-                if trade["signal"] == 1:  # 买入，入栈
+                if trade["signal"] == 1:
                     entry_stack.append({
                         "price": trade["price"],
                         "shares": trade["shares"],
+                        "date": trade["date"],
                         "commission": trade["commission"],
                         "stamp_tax": trade["stamp_tax"]
                     })
-                elif trade["signal"] == -1 and entry_stack:  # 卖出，出栈配对
+                elif trade["signal"] == -1 and entry_stack:
                     shares_to_sell = trade["shares"]
                     sell_price = trade["price"]
-                    sell_commission = trade["commission"]
-                    sell_stamp_tax = trade["stamp_tax"]
+                    sell_date = trade["date"]
 
                     while shares_to_sell > 0 and entry_stack:
                         entry = entry_stack[0]
                         matched_shares = min(shares_to_sell, entry["shares"])
 
-                        # 计算这笔卖出的盈亏
                         buy_cost = entry["price"] * matched_shares + entry["commission"]
-                        sell_proceed = sell_price * matched_shares - sell_commission - sell_stamp_tax
+                        sell_proceed = sell_price * matched_shares - entry["stamp_tax"]
                         pnl = sell_proceed - buy_cost
 
                         if pnl > 0:
                             winning_pairs += 1
+                            total_profit += pnl
+                        else:
+                            total_loss += abs(pnl)
                         completed_pairs += 1
+                        
+                        # 计算持仓天数
+                        if entry.get("date") and sell_date:
+                            days = (sell_date - entry["date"]).days
+                            holding_days.append(days)
 
-                        # 更新栈
                         entry["shares"] -= matched_shares
                         shares_to_sell -= matched_shares
                         if entry["shares"] <= 0:
                             entry_stack.pop(0)
 
             win_rate = winning_pairs / completed_pairs if completed_pairs > 0 else 0
+            profit_loss_ratio = total_profit / total_loss if total_loss > 0 else float('inf')
+            avg_holding_days = np.mean(holding_days) if holding_days else 0
         else:
             win_rate = 0
+            profit_loss_ratio = 0
+            avg_holding_days = 0
         
         # 交易次数
         total_trades = len(trades_df)
@@ -433,7 +469,12 @@ class Backtester:
             "total_trades": total_trades,
             "equity_curve": equity_df,
             "trades": trades_df,
-            "risk_rejections": self.risk_rejections
+            "risk_rejections": self.risk_rejections,
+            # 新增字段
+            "volatility": volatility,
+            "calmar_ratio": calmar_ratio,
+            "profit_loss_ratio": profit_loss_ratio,
+            "avg_holding_days": avg_holding_days
         }
     
     def plot_results(self, save_path: Optional[str] = None):

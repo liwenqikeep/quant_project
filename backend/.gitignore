@@ -70,9 +70,6 @@ venv.bak/
 logs/
 *.log
 
-# Data
-data/
-!data/.gitkeep
 
 # Models
 models/

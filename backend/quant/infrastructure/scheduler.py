@@ -26,7 +26,7 @@ class TaskType(Enum):
     """任务类型"""
     ONCE = "once"           # 单次任务
     PERIODIC = "periodic"   # 周期任务
-    CRON = "cron"          # Cron任务
+    # CRON = "cron"         # Cron任务（预留，暂未实现）
 
 
 @dataclass

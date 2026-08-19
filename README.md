@@ -287,8 +287,7 @@ quant_project/
 ```bash
 cd backend
 pip install -e ".[dev]"  # 安装项目及开发依赖
-# 或
-pip install -r requirements.txt
+pip install -e ".[all]"   # 安装全部依赖（含情感分析）
 ```
 
 ## 快速开始
@@ -296,10 +295,10 @@ pip install -r requirements.txt
 ### 数据获取与回测
 
 ```python
-from data.fetcher import DataFetcher
-from data.processor import DataProcessor
-from strategies.ma_strategy import MAStrategy
-from backtest.backtester import Backtester
+from quant.data.fetcher import DataFetcher
+from quant.data.processor import DataProcessor
+from quant.strategies.ma_strategy import MAStrategy
+from quant.backtest.backtester import Backtester
 
 # 获取数据
 fetcher = DataFetcher()
@@ -314,34 +313,29 @@ strategy = MAStrategy(short_window=10, long_window=30)
 signals = strategy.generate_signals(df_processed)
 
 # 回测
-backtester = Backtester(initial_cash=1000000)
+backtester = Backtester(initial_cash=1000000, symbol="000001.SZ")
 results = backtester.run(df_processed, signals)
 
 print(f"总收益: {results['total_return']:.2%}")
 print(f"夏普: {results['sharpe_ratio']:.2f}")
+print(f"最大回撤: {results['max_drawdown']:.2%}")
 ```
 
-### 完整策略运行（含风控）
+### 组合回测
 
 ```python
-from risk.risk_engine import RiskEngine
-from execution.broker_adapter import SimulatedBroker
-from execution.order_manager import OrderManager
+from quant.backtest.portfolio_backtester import PortfolioBacktester
 
-# 初始化组件
-broker = SimulatedBroker(initial_cash=1000000)
-risk_engine = RiskEngine()
-order_manager = OrderManager(broker, risk_engine)
-
-# 策略信号 -> 订单 -> 风控 -> 执行
-# ...完整流程参见各模块示例
+# 多标的组合回测
+portfolio = PortfolioBacktester(symbols=["000001.SZ", "000002.SZ"])
+results = portfolio.run_with_equal_weight(prices, rebalance_freq=5)
 ```
 
 ### 生成分析报告
 
 ```python
-from analysis.performance import PerformanceAnalyzer
-from analysis.report_generator import ReportGenerator
+from quant.analysis.performance import PerformanceAnalyzer
+from quant.analysis.report_generator import ReportGenerator
 
 analyzer = PerformanceAnalyzer()
 metrics = analyzer.analyze(equity_curve)

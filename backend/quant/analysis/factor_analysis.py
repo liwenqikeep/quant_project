@@ -38,7 +38,10 @@ class FactorAnalyzer:
         method: str = "spearman"
     ) -> Tuple[float, float, float]:
         """
-        计算IC（信息系数）
+        计算IC（信息系数）- 滚动时间序列IC
+        
+        注意：此方法计算单只股票的时间序列滚动相关
+        建议使用 calculate_cross_sectional_ic 计算截面IC
         
         Args:
             factor_data: 因子值
@@ -58,7 +61,7 @@ class FactorAnalyzer:
             logger.warning("数据不足，无法计算IC")
             return 0, 0, 0
         
-        # 计算相关系数
+        # 计算相关系数（滚动20期）
         if method == "spearman":
             ic_series = aligned['factor'].rolling(20).corr(
                 aligned['returns'], method='spearman'
@@ -68,6 +71,68 @@ class FactorAnalyzer:
         
         ic_mean = ic_series.mean()
         ic_std = ic_series.std()
+        ic_ir = ic_mean / ic_std if ic_std != 0 else 0
+        
+        return ic_mean, ic_std, ic_ir
+    
+    def calculate_cross_sectional_ic(
+        self,
+        factor_data: pd.DataFrame,
+        forward_returns: pd.DataFrame,
+        method: str = "spearman"
+    ) -> Tuple[float, float, float]:
+        """
+        计算截面IC（信息系数）- 标准IC定义
+        
+        在每个日期，计算同一日期下所有股票的因子值与未来收益之间的截面相关，
+        然后对所有日期的截面相关系数取平均。
+        
+        Args:
+            factor_data: 因子值 DataFrame（日期 x 股票）
+            forward_returns: 未来收益 DataFrame（日期 x 股票）
+            method: 相关性方法 "spearman" 或 "pearson"
+        
+        Returns:
+            (IC均值, IC标准差, IC_IR)
+        """
+        common_dates = factor_data.index.intersection(forward_returns.index)
+        common_symbols = factor_data.columns.intersection(forward_returns.columns)
+        
+        if len(common_dates) < 10 or len(common_symbols) < 3:
+            logger.warning("数据不足，无法计算截面IC")
+            return 0, 0, 0
+        
+        factor_aligned = factor_data.loc[common_dates, common_symbols]
+        returns_aligned = forward_returns.loc[common_dates, common_symbols]
+        
+        ic_series = []
+        for date in common_dates:
+            factor_row = factor_aligned.loc[date]
+            returns_row = returns_aligned.loc[date]
+            
+            # 去除 NaN
+            valid_mask = factor_row.notna() & returns_row.notna()
+            if valid_mask.sum() < 3:
+                continue
+            
+            factor_valid = factor_row[valid_mask]
+            returns_valid = returns_row[valid_mask]
+            
+            # 计算该日期的截面相关系数
+            if method == "spearman":
+                ic = factor_valid.corr(returns_valid, method='spearman')
+            else:
+                ic = factor_valid.corr(returns_valid)
+            
+            if not np.isnan(ic):
+                ic_series.append(ic)
+        
+        if len(ic_series) < 5:
+            logger.warning("有效截面数据不足")
+            return 0, 0, 0
+        
+        ic_mean = np.mean(ic_series)
+        ic_std = np.std(ic_series)
         ic_ir = ic_mean / ic_std if ic_std != 0 else 0
         
         return ic_mean, ic_std, ic_ir
