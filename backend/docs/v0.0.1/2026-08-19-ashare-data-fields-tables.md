@@ -11,7 +11,7 @@
 1. 默认数据源为 AKShare，日线接口 `ak.stock_zh_a_hist`（东方财富），已在 `quant_project` 环境实测跑通（见第七节验证记录）。
 2. AKShare 1.18.92 实际返回 **12 列**：日期、股票代码、开盘、收盘、最高、最低、成交量、成交额、振幅、涨跌幅、涨跌额、换手率；当前 `AkshareAdapter.get_stock_history` 用 11 个列名做整体替换，**必然报错且映射错位**，必须按映射字典重构（见第六节整改点）。
 3. 字段设计核心决策：交易日（`trade_date`）+ 标的（`symbol`）+ **复权类型（`adjust_type`）** 三要素作为日线唯一键；成交量统一为「手」、成交额统一为「元」、涨跌幅/振幅/换手率统一为「小数」（0.01 = 1%）。
-4. 表设计共 4 张：`stock_daily`（日线行情）、`stock_basic`（股票基础信息）、`trade_calendar`（交易日历）、`data_fetch_log`（拉取审计/断点续拉）。
+4. 表设计共 5 张：`stock_daily`（日线行情）、`stock_basic`（股票基础信息）、`trade_calendar`（交易日历）、`data_fetch_log`（拉取审计/断点续拉）、`data_source`（数据源登记）。
 
 ---
 
@@ -68,6 +68,18 @@ ak.stock_zh_a_daily(symbol="sh600519", start_date="20231201", end_date="20231215
 | `ak.tool_trade_date_hist_sina()` | 1 列 `trade_date`，实测 8797 行（1990-12-19 起） | 交易日历表 |
 | `ak.stock_info_a_code_name()` | 2 列 `code` / `name`，实测 5547 只 | 股票基础信息表（交易所由代码前缀推导） |
 
+### 2.4 数据源一览（akshare / tushare）
+
+| 数据源 | 适配器类 | 状态 | 默认 | token | 主要接口 | 关键口径 | 备注 |
+|--------|----------|------|------|-------|----------|----------|------|
+| akshare | `AkshareAdapter` | 启用 | 是 | 无需 | `stock_zh_a_hist`（东财日线）、`stock_zh_a_daily`（新浪备用）、`tool_trade_date_hist_sina`（日历）、`stock_info_a_code_name`（列表） | 东财：成交量=手、成交额=元、涨跌幅/振幅/换手率=百分比数值；新浪：成交量=股、换手率=小数 | 免费开源、接口丰富；偶发反爬断连，适配器须带重试与超时（见第六节整改点 5） |
+| tushare | `TushareAdapter` | 未启用（规划） | 否 | 需要（config.yaml `data.sources.tushare.token`） | `pro.daily`（日线，未复权）、`pro.adj_factor`（复权因子） | 成交量=手、成交额=**千元**（入库须 ×1000 换算为元）、涨跌幅=百分比数值；复权需自行用复权因子计算 | 积分制、接口规范稳定；未启用前不承诺数据可用性，token 仅存 config，不落库 |
+
+说明：
+
+- 数据源注册信息（source_key / 适配器 / 启用状态 / 默认标记）由 `data_source` 表持久化（见 4.5 节）；启用与默认标记应与 `config.yaml` 的 `data.sources` 段保持一致。
+- `stock_daily.source` 等表的 `source` 字段记录具体接口标记（如 `akshare-em`、`akshare-sina`、`tushare-pro`），其归属数据源见 `data_source.source_key`。
+
 ---
 
 ## 三、字段设计（内部规范列）
@@ -89,7 +101,7 @@ ak.stock_zh_a_daily(symbol="sh600519", start_date="20231201", end_date="20231215
 | `change_pct` | float | 小数 | 涨跌幅 ÷ 100 | 否 | 0.0174 表示 +1.74% |
 | `change_amount` | float | 元 | 涨跌额 | 否 | |
 | `turnover` | float | 小数 | 换手率 ÷ 100 | 否 | 0.0026 表示 0.26% |
-| `source` | str | `akshare-em` / `akshare-sina` | 适配器标记 | 是 | 数据溯源 |
+| `source` | str | `akshare-em` / `akshare-sina` / `tushare-pro` | 适配器标记 | 是 | 数据溯源；归属数据源见 `data_source.source_key` |
 | `created_at` / `updated_at` | datetime | - | 落库时间 | 是 | 审计 |
 
 口径说明：
@@ -204,7 +216,30 @@ CREATE TABLE data_fetch_log (
 CREATE INDEX idx_fetch_log_symbol ON data_fetch_log (symbol, fetched_at);
 ```
 
-### 4.5 与现有模型的兼容
+### 4.5 `data_source`（数据源登记表）
+
+描述数据来源及其适配器、启用状态；**token 等密钥不落库**（AGENTS.md 密钥不入库红线），tushare token 仅存于 config.yaml。
+
+```sql
+CREATE TABLE data_source (
+    source_key  TEXT PRIMARY KEY,           -- akshare / tushare
+    name        TEXT NOT NULL,              -- 数据源名称
+    adapter     TEXT NOT NULL,              -- 适配器类全限定名
+    enabled     INTEGER NOT NULL DEFAULT 1, -- 是否启用（与 config data.sources.*.enabled 对齐）
+    is_default  INTEGER NOT NULL DEFAULT 0, -- 是否默认数据源
+    description TEXT,                       -- 适用场景/口径说明
+    updated_at  DATETIME NOT NULL
+);
+```
+
+初始化数据：
+
+| source_key | name | adapter | enabled | is_default | description |
+|------------|------|---------|---------|------------|-------------|
+| akshare | AKShare | `quant.data.base_data_source.AkshareAdapter` | 1 | 1 | 免费开源默认数据源；日线走东方财富、备用新浪；无需 token |
+| tushare | Tushare | `quant.data.base_data_source.TushareAdapter` | 0 | 0 | 需 token（config 配置），积分制；成交额单位千元、复权需复权因子接口 |
+
+### 4.6 与现有模型的兼容
 
 - 现有 `StockData`（`storage/database.py`）只有 symbol/trade_date/OHLCV，**无复权维度与派生字段**；本设计为演进目标，实施时建议新增 `StockDaily` 模型并保留旧模型不破坏存量（或在确认无依赖后迁移，迁移决策由技术负责人定）。
 - `trade_records` / `signal_records` / `backtest_results` 与行情表无结构冲突，不改。
