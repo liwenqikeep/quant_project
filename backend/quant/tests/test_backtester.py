@@ -69,11 +69,11 @@ class TestBacktester:
         assert abs(trade['stamp_tax'] - expected_stamp_tax) < 0.01
 
     def test_commission_calculation(self):
-        """佣金计算正确"""
+        """佣金计算正确（含最低佣金）"""
         trade_value = 10000  # 100股 * 100元
-        expected_commission = trade_value * 0.0003
-
-        # 买入
+        rate_commission = trade_value * 0.0003  # 按费率计算约3元
+        
+        # 买入（小额交易会触发最低佣金5元）
         trade = self.backtester.execute_trade(
             date=datetime.now(),
             price=100.0,
@@ -81,7 +81,8 @@ class TestBacktester:
             position_size=100
         )
 
-        assert abs(trade['commission'] - expected_commission) < 0.01
+        # 启用最低佣金后，小额交易佣金应为5元（最低佣金）
+        assert abs(trade['commission'] - 5.0) < 0.01, "小额交易应触发最低佣金5元"
 
     def test_buy_total_cost(self):
         """买入总成本计算"""

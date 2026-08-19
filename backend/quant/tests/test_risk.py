@@ -22,7 +22,8 @@ class TestRiskControl:
 
     def test_position_limits_initialization(self):
         """仓位限制初始化"""
-        limits = PositionLimits()
+        from quant.risk.position_limits import PositionLimitManager
+        limits = PositionLimitManager(PositionLimits())
         assert limits is not None
         assert hasattr(limits, 'set_total_value')
 

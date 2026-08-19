@@ -16,12 +16,15 @@ class TestSignalGeneration:
 
     def test_ma_golden_cross(self):
         """MA金叉买入信号 - 测试真实策略"""
-        # 创建上涨的价格序列，会产生金叉
-        dates = pd.date_range(start='2024-01-01', periods=30, freq='D')
+        # 创建足够长的价格序列，包含金叉
+        dates = pd.date_range(start='2024-01-01', periods=50, freq='D')
+        # 先下跌（短期均线在长期均线下方），再上涨穿越
         prices = pd.Series(
-            [100, 98, 96, 95, 97, 99, 102, 105, 108, 110,
-             108, 106, 107, 109, 112, 115, 118, 120, 122, 125,
-             123, 121, 122, 124, 127, 130, 133, 135, 132, 130],
+            [100, 98, 96, 94, 92, 90, 88, 86, 84, 82,  # 下跌
+             85, 88, 91, 94, 97, 100, 103, 106, 109, 112,  # 开始上涨
+             115, 118, 121, 124, 127, 130, 133, 136, 139, 142,  # 继续上涨
+             145, 148, 151, 154, 157, 160, 163, 166, 169, 172,  # 持续上涨
+             170, 168, 166, 164, 162, 160, 158, 156, 154, 152],  # 回调
             index=dates
         )
 
@@ -29,18 +32,21 @@ class TestSignalGeneration:
         df = prices.to_frame(name='close')
         df = strategy.generate_signals(df)
 
-        # 检查是否有金叉信号
+        # 检查是否有金叉信号（需要足够的数据才能产生）
         golden_crosses = df[df['signal'] == 1]
-        assert len(golden_crosses) > 0, "应产生金叉买入信号"
+        assert len(golden_crosses) > 0, f"应产生金叉买入信号（实际信号分布: {df['signal'].value_counts().to_dict()}）"
 
     def test_ma_death_cross(self):
         """MA死叉卖出信号 - 测试真实策略"""
-        # 创建下跌的价格序列
-        dates = pd.date_range(start='2024-01-01', periods=30, freq='D')
+        # 创建足够长的价格序列，包含死叉
+        dates = pd.date_range(start='2024-01-01', periods=50, freq='D')
+        # 先上涨（短期均线在长期均线上方），再下跌穿越
         prices = pd.Series(
-            [130, 128, 126, 125, 123, 121, 118, 115, 112, 110,
-             112, 114, 113, 111, 108, 105, 102, 100, 98, 95,
-             97, 99, 98, 96, 93, 90, 87, 85, 87, 89],
+            [80, 82, 84, 86, 88, 90, 92, 94, 96, 98,  # 上涨
+             100, 102, 104, 106, 108, 105, 102, 99, 96, 93,  # 开始下跌
+             90, 87, 84, 81, 78, 75, 72, 69, 66, 63,  # 持续下跌
+             60, 57, 54, 51, 48, 45, 42, 39, 36, 33,  # 继续下跌
+             35, 37, 39, 41, 43, 45, 47, 49, 51, 53],  # 反弹
             index=dates
         )
 
@@ -50,7 +56,7 @@ class TestSignalGeneration:
 
         # 检查是否有死叉信号
         death_crosses = df[df['signal'] == -1]
-        assert len(death_crosses) > 0, "应产生死叉卖出信号"
+        assert len(death_crosses) > 0, f"应产生死叉卖出信号（实际信号分布: {df['signal'].value_counts().to_dict()}）"
 
     def test_rsi_oversold_buy(self):
         """RSI超卖买入信号 - 测试真实策略"""
