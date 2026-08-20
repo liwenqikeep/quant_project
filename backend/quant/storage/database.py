@@ -1,28 +1,145 @@
 """
 数据库操作模块
-基于SQLAlchemy的数据持久化
+
+支持 SQLite 的 SQLAlchemy 模型与 upsert 方法，承载：
+- stock_daily（日线行情，唯一键 symbol+trade_date+adjust_type）
+- stock_basic（股票基础信息）
+- trade_calendar（交易日历）
+- data_fetch_log（拉取审计/断点续拉）
+- data_calibration_log（校准明细）
+
+旧 StockData/trade_records 等模型保留兼容。
 """
-import pandas as pd
-from typing import Dict, List, Optional, Any
-from datetime import datetime, date
-from dataclasses import dataclass
-from pathlib import Path
 import json
+from dataclasses import dataclass, field
+from datetime import datetime, date
+from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, List, Literal, Optional
+
+import pandas as pd
 from quant.utils.logger import logger
 
 try:
-    from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime, Date, Text, JSON
+    from sqlalchemy import (
+        create_engine,
+        Column,
+        Float,
+        Index,
+        Integer,
+        String,
+        Text,
+        DateTime,
+        Date,
+        JSON,
+    )
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
     from sqlalchemy.ext.declarative import declarative_base
-    from sqlalchemy.orm import sessionmaker, Session
+    from sqlalchemy.orm import Session, sessionmaker
+
     SQLALCHEMY_AVAILABLE = True
 except ImportError:
     SQLALCHEMY_AVAILABLE = False
-    logger.warning("SQLAlchemy未安装，将使用简化版存储")
+    logger.warning("SQLAlchemy 未安装，将使用简化版存储")
 
 
+# ---------------------------------------------------------------------------
 # 数据模型定义
+# ---------------------------------------------------------------------------
 if SQLALCHEMY_AVAILABLE:
     Base = declarative_base()
+
+    class StockDaily(Base):
+        """日线行情表"""
+
+        __tablename__ = "stock_daily"
+
+        id = Column(Integer, primary_key=True, autoincrement=True)
+        symbol = Column(String(20), nullable=False)
+        trade_date = Column(Date, nullable=False)
+        adjust_type = Column(String(10), nullable=False, default="qfq")
+        open = Column(Float)
+        high = Column(Float)
+        low = Column(Float)
+        close = Column(Float)
+        volume = Column(Float)  # 手
+        amount = Column(Float)  # 元
+        amplitude = Column(Float)  # 小数
+        change_pct = Column(Float)  # 小数
+        change_amount = Column(Float)
+        turnover = Column(Float)  # 小数
+        source = Column(String(50), nullable=False, default="akshare-em")
+        created_at = Column(DateTime, nullable=False, default=datetime.now)
+        updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
+
+        __table_args__ = (
+            # 唯一键：symbol + trade_date + adjust_type，幂等 upsert 依据
+            Index("idx_stock_daily_unique", "symbol", "trade_date", "adjust_type", unique=True),
+            Index("idx_stock_daily_date", "trade_date", "symbol"),
+            Index("idx_stock_daily_symbol", "symbol", "trade_date"),
+        )
+
+    class StockBasic(Base):
+        """股票基础信息表"""
+
+        __tablename__ = "stock_basic"
+
+        symbol = Column(String(20), primary_key=True)
+        name = Column(String(100), nullable=False)
+        exchange = Column(String(10), nullable=False)  # SH / SZ / BJ
+        source = Column(String(50), nullable=False)
+        updated_at = Column(DateTime, nullable=False, default=datetime.now, onupdate=datetime.now)
+
+    class TradeCalendar(Base):
+        """交易日历表"""
+
+        __tablename__ = "trade_calendar"
+
+        trade_date = Column(Date, primary_key=True)
+        source = Column(String(50), nullable=False, default="sina")
+
+    class DataFetchLog(Base):
+        """拉取审计表"""
+
+        __tablename__ = "data_fetch_log"
+
+        id = Column(Integer, primary_key=True, autoincrement=True)
+        symbol = Column(String(20), nullable=False)
+        adjust_type = Column(String(10), nullable=False)
+        start_date = Column(Date)
+        end_date = Column(Date)
+        status = Column(String(20), nullable=False)  # success / failed / partial / stale / empty / skipped
+        row_count = Column(Integer, default=0)
+        error = Column(Text)
+        detail = Column(Text)  # JSON 扩展字段
+        duration_ms = Column(Integer)
+        fetched_at = Column(DateTime, nullable=False, default=datetime.now)
+
+        __table_args__ = (
+            Index("idx_fetch_log_breakpoint", "symbol", "adjust_type", "status", "end_date"),
+            Index("idx_fetch_log_symbol", "symbol", "fetched_at"),
+        )
+
+    class DataCalibrationLog(Base):
+        """校准明细表"""
+
+        __tablename__ = "data_calibration_log"
+
+        id = Column(Integer, primary_key=True, autoincrement=True)
+        symbol = Column(String(20), nullable=False)
+        trade_date = Column(Date, nullable=False)
+        adjust_type = Column(String(10), nullable=False)
+        field = Column(String(50), nullable=False)
+        old_value = Column(Float)
+        new_value = Column(Float)
+        diff_ratio = Column(Float)
+        decision = Column(String(50), nullable=False)  # auto_correct / keep_local / backfill / drift
+        message = Column(Text)
+        checked_at = Column(DateTime, nullable=False, default=datetime.now)
+
+        __table_args__ = (
+            Index("idx_calib_log_symbol", "symbol", "trade_date"),
+        )
 
 
     class StockData(Base):
@@ -425,6 +542,268 @@ class Database:
         finally:
             session.close()
     
+    # -------------------------------------------------------------------------
+    # 新增：日线 upsert 与断点查询（满足 AKShare 数据获取设计）
+    # -------------------------------------------------------------------------
+
+    def upsert_stock_daily(self, bars: list[dict]) -> int:
+        """
+        批量 upsert 日线行情 (INSERT ... ON CONFLICT DO UPDATE，幂等)
+
+        Args:
+            bars: DailyBar 字典列表，键对应 StockDaily 列
+
+        Returns:
+            写入行数
+        """
+        if not bars:
+            return 0
+
+        session = self.get_session()
+        try:
+            stmt = sqlite_insert(StockDaily).values(bars)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["symbol", "trade_date", "adjust_type"],
+                set_={
+                    "open": stmt.excluded.open,
+                    "high": stmt.excluded.high,
+                    "low": stmt.excluded.low,
+                    "close": stmt.excluded.close,
+                    "volume": stmt.excluded.volume,
+                    "amount": stmt.excluded.amount,
+                    "amplitude": stmt.excluded.amplitude,
+                    "change_pct": stmt.excluded.change_pct,
+                    "change_amount": stmt.excluded.change_amount,
+                    "turnover": stmt.excluded.turnover,
+                    "source": stmt.excluded.source,
+                    "updated_at": datetime.now(),
+                },
+            )
+            result = session.execute(stmt)
+            session.commit()
+            return result.rowcount  # type: ignore[attr-defined]
+        except Exception as e:
+            session.rollback()
+            logger.error(f"upsert_stock_daily 失败: {e}")
+            raise
+        finally:
+            session.close()
+
+    def get_stock_daily(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+        adjust_type: str = "qfq"
+    ) -> pd.DataFrame:
+        """
+        查询日线行情
+
+        Returns:
+            DataFrame，列：symbol/trade_date/open/high/low/close/volume/amount/
+            amplitude/change_pct/change_amount/turnover/source，
+            index=trade_date（date 类型），按日期升序
+        """
+        if self.simple_db:
+            return pd.DataFrame()
+
+        session = self.get_session()
+        try:
+            rows = (
+                session.query(StockDaily)
+                .filter(
+                    StockDaily.symbol == symbol,
+                    StockDaily.adjust_type == adjust_type,
+                    StockDaily.trade_date >= start,
+                    StockDaily.trade_date <= end,
+                )
+                .order_by(StockDaily.trade_date)
+                .all()
+            )
+            if not rows:
+                return pd.DataFrame()
+
+            data = [
+                {
+                    "symbol": r.symbol,
+                    "trade_date": r.trade_date,
+                    "open": r.open,
+                    "high": r.high,
+                    "low": r.low,
+                    "close": r.close,
+                    "volume": r.volume,
+                    "amount": r.amount,
+                    "amplitude": r.amplitude,
+                    "change_pct": r.change_pct,
+                    "change_amount": r.change_amount,
+                    "turnover": r.turnover,
+                    "source": r.source,
+                }
+                for r in rows
+            ]
+            df = pd.DataFrame(data)
+            df.set_index("trade_date", inplace=True)
+            return df
+        except Exception as e:
+            logger.error(f"get_stock_daily 失败: {e}")
+            return pd.DataFrame()
+        finally:
+            session.close()
+
+    def get_latest_success_fetch(
+        self,
+        symbol: str,
+        adjust_type: str
+    ) -> Optional[Dict]:
+        """
+        查询最近一次成功的拉取记录（用于增量断点）
+
+        Returns:
+            dict（含 end_date, fetched_at）或 None
+        """
+        if self.simple_db:
+            return None
+
+        session = self.get_session()
+        try:
+            row = (
+                session.query(DataFetchLog)
+                .filter(
+                    DataFetchLog.symbol == symbol,
+                    DataFetchLog.adjust_type == adjust_type,
+                    DataFetchLog.status.in_(["success", "partial"]),
+                )
+                .order_by(DataFetchLog.fetched_at.desc())
+                .first()
+            )
+            if row is None:
+                return None
+            return {
+                "end_date": row.end_date,
+                "fetched_at": row.fetched_at,
+                "row_count": row.row_count,
+            }
+        except Exception as e:
+            logger.error(f"get_latest_success_fetch 失败: {e}")
+            return None
+        finally:
+            session.close()
+
+    def insert_fetch_log(self, log: Dict) -> int:
+        """
+        写入拉取审计日志
+
+        Args:
+            log: 字段字典，对应 DataFetchLog 列
+        """
+        if self.simple_db:
+            return 0
+
+        session = self.get_session()
+        try:
+            record = DataFetchLog(**log)
+            session.add(record)
+            session.commit()
+            return record.id  # type: ignore[return-value]
+        except Exception as e:
+            session.rollback()
+            logger.error(f"insert_fetch_log 失败: {e}")
+            return -1
+        finally:
+            session.close()
+
+    def get_latest_trade_date(
+        self,
+        symbol: str,
+        adjust_type: str = "qfq"
+    ) -> Optional[date]:
+        """查询库中某标的最新有数据的交易日"""
+        if self.simple_db:
+            return None
+
+        session = self.get_session()
+        try:
+            row = (
+                session.query(StockDaily.trade_date)
+                .filter(
+                    StockDaily.symbol == symbol,
+                    StockDaily.adjust_type == adjust_type,
+                )
+                .order_by(StockDaily.trade_date.desc())
+                .first()
+            )
+            return row[0] if row else None
+        except Exception as e:
+            logger.error(f"get_latest_trade_date 失败: {e}")
+            return None
+        finally:
+            session.close()
+
+    def save_calibration_logs(self, issues: List[Dict]) -> int:
+        """
+        批量写入校准差异日志
+
+        Args:
+            issues: 字段字典列表，对应 DataCalibrationLog 列
+        """
+        if not issues or self.simple_db:
+            return 0
+
+        session = self.get_session()
+        try:
+            records = [DataCalibrationLog(**issue) for issue in issues]
+            session.bulk_save_objects(records)
+            session.commit()
+            return len(records)
+        except Exception as e:
+            session.rollback()
+            logger.error(f"save_calibration_logs 失败: {e}")
+            return 0
+        finally:
+            session.close()
+
+    def has_successful_fetch_today(
+        self,
+        symbol: str | None = None,
+        adjust_type: str | None = None,
+    ) -> bool:
+        """
+        检查是否存在今日成功的拉取记录
+
+        Args:
+            symbol: 标的，None 表示任意标的
+            adjust_type: 复权类型，None 表示任意类型
+        """
+        if self.simple_db:
+            return False
+
+        from datetime import datetime, timedelta
+        from zoneinfo import ZoneInfo
+
+        session = self.get_session()
+        try:
+            today_start = datetime.now(ZoneInfo("Asia/Shanghai")).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            today_end = today_start + timedelta(days=1)
+
+            query = session.query(DataFetchLog).filter(
+                DataFetchLog.fetched_at >= today_start,
+                DataFetchLog.fetched_at < today_end,
+                DataFetchLog.status.in_(["success", "partial"]),
+            )
+            if symbol:
+                query = query.filter(DataFetchLog.symbol == symbol)
+            if adjust_type:
+                query = query.filter(DataFetchLog.adjust_type == adjust_type)
+
+            return session.query(query.exists()).scalar() is True
+        except Exception as e:
+            logger.error(f"has_successful_fetch_today 失败: {e}")
+            return False
+        finally:
+            session.close()
+
     def close(self):
         """关闭数据库连接"""
         if self.engine:
