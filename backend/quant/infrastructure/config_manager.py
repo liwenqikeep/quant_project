@@ -1,4 +1,4 @@
-﻿"""
+"""
 配置管理模块
 支持YAML/JSON配置、动态配置更新、配置验证
 """
@@ -64,19 +64,26 @@ class ConfigManager:
             "data.data_dir",
             "data.tmp_dir",
             "data.raw_dir",
-            "data.processed_dir"
+            "data.processed_dir",
+            # AKShare 数据获取设计新增必填
+            "data.adjust",
+            "data.storage.format",
+            "data.fetch.default_time",
+            "data.fetch.retry",
+            "data.fetch.incremental",
+            "data.fetch.backfill_start",
         ]
-        
+
         missing = []
         for key in required_keys:
             if self.get(key) is None:
                 missing.append(key)
-        
+
         if missing:
             logger.warning(f"配置缺失必填键: {missing}")
         else:
             logger.info("配置必填键校验通过")
-        
+
         return missing
     
     def _init_default_config(self):
@@ -92,11 +99,40 @@ class ConfigManager:
                 "tmp_dir": "tmp",
                 "raw_dir": "raw",
                 "processed_dir": "processed",
+                "adjust": "qfq",
+                "storage": {"format": "sqlite"},
+                "fetch": {
+                    "default_time": "17:30",
+                    "target_date_mode": "last_trade_date",
+                    "stale_tolerance_trading_days": 1,
+                    "retry": 3,
+                    "timeout_seconds": 20.0,
+                    "backoff_base_seconds": 1,
+                    "incremental": True,
+                    "lookback_days": 10,
+                    "backfill_start": "20000101",
+                    "batch_size": 20,
+                    "max_workers": 1,
+                    "request_interval_seconds": 0.5,
+                    "schedule": {
+                        "enabled": True,
+                        "weekdays": [1, 2, 3, 4, 5],
+                        "catch_up": True,
+                    },
+                    "calibration": {
+                        "enabled": True,
+                        "price_tolerance": 0.001,
+                        "volume_tolerance": 0.01,
+                        "auto_correct_drift": True,
+                        "alert_on_discrepancy": True,
+                    },
+                },
                 "sources": {
                     "default": "akshare",
                     "akshare": {"enabled": True},
                     "tushare": {"enabled": False, "token": ""}
-                }
+                },
+                "stock_pool": [],
             },
             "strategy": {
                 "initial_cash": 1000000,
@@ -124,7 +160,7 @@ class ConfigManager:
                 "debug": False
             }
         }
-        
+
         # 验证必填配置
         self._validate_required_keys()
     

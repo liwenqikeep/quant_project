@@ -1,4 +1,4 @@
-﻿# ========== 量化项目配置 ==========
+# ========== 量化项目配置 ==========
 
 # 数据配置
 data:
@@ -8,6 +8,38 @@ data:
   tmp_dir: "tmp"
   raw_dir: "raw"
   processed_dir: "processed"
+
+  # 默认复权类型："" / qfq / hfq
+  adjust: "qfq"
+
+  # 数据存储格式：sqlite（当前）| parquet（预留）
+  storage:
+    format: "sqlite"
+
+  # 数据获取配置
+  fetch:
+    default_time: "17:30"       # 全局默认获取时间（HH:MM）
+    target_date_mode: "last_trade_date"   # last_trade_date | today
+    stale_tolerance_trading_days: 1
+    retry: 3                    # 失败重试次数
+    timeout_seconds: 20         # 单请求超时（秒）
+    backoff_base_seconds: 1     # 指数退避基数
+    incremental: true           # 是否增量续拉
+    lookback_days: 10           # 增量尾部重叠窗口（自然日），校准用
+    backfill_start: "20000101"  # 首次全量回填起点
+    batch_size: 20             # 每批标的数
+    max_workers: 1              # 并发请求数（默认 1 防限流）
+    request_interval_seconds: 0.5
+    schedule:
+      enabled: true
+      weekdays: [1, 2, 3, 4, 5] # 周一至周五
+      catch_up: true            # 错过触发时间后补跑
+    calibration:
+      enabled: true
+      price_tolerance: 0.001
+      volume_tolerance: 0.01
+      auto_correct_drift: true
+      alert_on_discrepancy: true
   
   # 数据源配置
   sources:

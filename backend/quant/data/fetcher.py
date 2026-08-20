@@ -10,11 +10,7 @@ from quant.utils.logger import logger
 
 # 导入数据源适配器
 from .base_data_source import BaseDataSource, AkshareAdapter, TushareAdapter
-
-
-class DataFetchError(Exception):
-    """数据获取错误"""
-    pass
+from .errors import DataFetchError
 
 
 class DataFetcher:
