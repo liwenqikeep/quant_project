@@ -6,7 +6,6 @@ AKShare 东财日线返回 12 列：日期、股票代码、开盘、收盘、�
 成交量(手)、成交额(元)、振幅(%)、涨跌幅(%)、涨跌额(元)、换手率(%)
 """
 import time
-from typing import Any
 
 import pandas as pd
 from abc import ABC, abstractmethod
@@ -127,24 +126,38 @@ class AkshareAdapter(BaseDataSource):
         end_date: str,
         adjust: str
     ) -> pd.DataFrame | None:
-        """单次拉取（可能超时），成功返回规范化 DataFrame，失败返回 None"""
+        """单次拉取（带超时），成功返回规范化 DataFrame，失败返回 None"""
         import akshare as ak
-        from functools import partial
-        import signal
+        from threading import Thread
+        from typing import Any
 
-        def _timeout_handler(signum: int, frame: Any) -> None:
+        result: dict[str, Any] = {"df": None, "error": None}
+
+        def _target() -> None:
+            try:
+                result["df"] = ak.stock_zh_a_hist(
+                    symbol=code,
+                    period="daily",
+                    start_date=start_date,
+                    end_date=end_date,
+                    adjust=adjust,
+                )
+            except Exception as e:  # noqa: BLE001
+                result["error"] = e
+
+        t = Thread(target=_target, daemon=True)
+        t.start()
+        t.join(timeout=self._timeout_seconds)
+
+        if t.is_alive():
+            # 超时：线程仍在运行（akshare 阻塞），视为超时错误
             raise TimeoutError(f"请求超时 {self._timeout_seconds}s")
 
-        # 东财日线
-        df = ak.stock_zh_a_hist(
-            symbol=code,
-            period="daily",
-            start_date=start_date,
-            end_date=end_date,
-            adjust=adjust
-        )
+        if result["error"]:
+            raise result["error"]
 
-        if df.empty:
+        df = result["df"]
+        if df is None or df.empty:
             return None
 
         return self._normalize(df)

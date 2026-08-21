@@ -11,13 +11,13 @@ from typing import Optional
 
 import pandas as pd
 
-from quant.config import get_config
 from quant.data.base_data_source import AkshareAdapter
 from quant.data.calibration import CalibrationConfig, DataCalibrator
 from quant.data.errors import DataFetchError
 from quant.data.models import (
     BatchFetchReport,
     DailyBarDict,
+    DataCalibrationReport,
     FetchLogDict,
     FetchOutcome,
     FetchStatus,
@@ -49,7 +49,9 @@ class DataSyncConfig:
     @classmethod
     def from_config(cls) -> "DataSyncConfig":
         """从 config.yaml 加载"""
-        cfg = get_config()
+        from quant.config import get_config_manager
+
+        cfg = get_config_manager()
         calib_cfg = CalibrationConfig(
             enabled=cfg.get("data.fetch.calibration.enabled", True),
             price_tolerance=cfg.get("data.fetch.calibration.price_tolerance", 0.001),
@@ -132,7 +134,6 @@ class DataSyncService:
         # P1-05: 日历初始化（前置依赖）
         self._ensure_calendar()
 
-        report = BatchFetchReport(total=len(symbols))
         t_start = datetime.now()
 
         for symbol in symbols:
@@ -194,7 +195,6 @@ class DataSyncService:
         self._ensure_calendar()
 
         report = BatchFetchReport(total=len(symbols))
-        t_start = datetime.now()
 
         for symbol in symbols:
             outcome = self._fetch_and_save(symbol, start_date, end_date, adjust)
@@ -435,16 +435,21 @@ class DataSyncService:
         for idx, row in df.iterrows():
             trade_date = idx.date() if hasattr(idx, "date") else idx
             decision = None
+            matched_issue = None
             # 查找该行在校准报告中的决策
             for issue in report.issues:
                 if issue.get("trade_date") == trade_date:
                     decision = issue.get("decision", "")
+                    matched_issue = issue
                     break
 
-            # KEEP_LOCAL / DISCREPANCY：不覆盖，跳过
+            # KEEP_LOCAL / DISCREPANCY：不覆盖，跳过，但记录日志
             if decision in ("keep_local", "discrepancy"):
+                if matched_issue:
+                    issues.append(matched_issue)
                 continue
 
+            # BACKFILL / AUTO_CORRECT_DRIFT：正常 upsert
             bars.append(
                 DailyBarDict(
                     symbol=symbol,

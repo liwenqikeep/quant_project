@@ -4,12 +4,12 @@
 支持多种数据源，通过配置或参数选择数据源
 """
 import pandas as pd
-from typing import List, Optional, Tuple
-from pathlib import Path
+from typing import List, Tuple
+
 from quant.utils.logger import logger
 
 # 导入数据源适配器
-from .base_data_source import BaseDataSource, AkshareAdapter, TushareAdapter
+from .base_data_source import AkshareAdapter, TushareAdapter
 from .errors import DataFetchError
 
 
@@ -113,18 +113,23 @@ class DataFetcher:
                     adjust=adjust
                 )
                 if df.empty:
-                    logger.warning(f"{symbol} 数据为空")
-                    return df
+                    raise DataFetchError(
+                        f"{symbol}: [{start_date}-{end_date}] 数据为空",
+                        symbol=symbol,
+                        interval=f"{start_date}-{end_date}",
+                    )
                 logger.info(f"成功获取 {symbol} 数据，共 {len(df)} 条记录")
                 return df
+            except DataFetchError:
+                raise
             except Exception as e:
                 last_error = e
                 logger.warning(f"获取 {symbol} 数据失败 (尝试 {attempt + 1}/{retry}): {e}")
                 if attempt < retry - 1:
                     import time
                     time.sleep(1 * (attempt + 1))  # 指数退避
-        
-        raise DataFetchError(f"{symbol}: {last_error}") from last_error
+
+        raise DataFetchError(f"{symbol}: {last_error}", symbol=symbol) from last_error
 
     def get_stock_batch(
         self,

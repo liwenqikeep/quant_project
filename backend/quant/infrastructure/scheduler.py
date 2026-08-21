@@ -2,14 +2,12 @@
 定时任务调度器
 支持定时任务、周期任务、延时任务
 """
-import pandas as pd
 from typing import Dict, List, Optional, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from threading import Thread, Event, Lock
-import time
-from pathlib import Path
+
 from quant.utils.logger import logger
 
 
@@ -346,10 +344,14 @@ class DataSyncJob:
             from zoneinfo import ZoneInfo
 
             now = datetime.now(ZoneInfo("Asia/Shanghai"))
-            today_weekday = now.weekday()
+            # weekday() 返回 0=周一 ... 6=周日
+            # 配置 weekdays=[1,2,3,4,5] 表示周一到周五（1=周一）
+            # 所以需要 +1 对齐：0(周一)+1=1, 6(周日)+1=7
+            today_weekday = now.weekday() + 1
 
             if today_weekday not in self.weekdays:
-                logger.info(f"DataSyncJob: 今日（周{today_weekday + 1}）不在 weekdays={self.weekdays}，跳过")
+                weekday_names = ["一", "二", "三", "四", "五", "六", "日"]
+                logger.info(f"DataSyncJob: 今日（周{weekday_names[today_weekday - 1]}）不在 weekdays={self.weekdays}，跳过")
                 return None
 
             if self._has_successful_fetch_today():

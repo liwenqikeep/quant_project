@@ -39,9 +39,9 @@ def get_data_paths() -> Dict[str, Path]:
     Returns:
         {"data_dir": Path, "tmp": Path, "raw": Path, "processed": Path}
     """
-    from quant.config import get_config
+    from quant.config import get_config_manager
 
-    cfg = get_config()
+    cfg = get_config_manager()
 
     data_dir = _resolve(cfg.get("data.data_dir", "data"))
 

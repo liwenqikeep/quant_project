@@ -6,7 +6,7 @@ L3 修正校准（重叠窗口对比 + 漂移识别 + 决策矩阵）。
 """
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Literal, NotRequired, TypedDict
+from typing import TypedDict
 
 import numpy as np
 import pandas as pd
@@ -75,7 +75,7 @@ class DataCalibrator:
             - clean_df: L2 校验通过的 DataFrame（可落库）
             - report: DataCalibrationReport（含违规数、差异数、决策）
         """
-        from quant.storage.database import Database
+        from quant.storage.database import Database  # noqa: F401
 
         # L2 硬校验
         df_valid, l2_issues = self.validate(df, symbol)
@@ -172,9 +172,9 @@ class DataCalibrator:
 
         cal = get_calendar()
         non_trading_dates = []
-        for d in set(dates):
-            if d not in seen:
-                continue
+        # 对所有日期（非重复）检查是否为交易日
+        all_dates = set(dates)
+        for d in all_dates:
             if cal.trading_days and d not in set(cal.trading_days):
                 non_trading_dates.append(d)
         for d in non_trading_dates:
@@ -404,7 +404,7 @@ class DataCalibrator:
                 if old_v is None or new_v is None or old_v == 0:
                     continue
                 ratio = new_v / old_v
-                drift_ratios.append({"date": d, "col": col, "ratio": ratio})
+                drift_ratios.append({"date": d, "col": col, "ratio": ratio, "old_v": old_v, "new_v": new_v})
 
         # P1-03: 漂移识别（全区间同比例系统性偏移）
         if drift_ratios:
@@ -428,8 +428,8 @@ class DataCalibrator:
                             trade_date=r["date"],
                             adjust_type=adjust_type,
                             field=r["col"],
-                            old_value=float(old_v) if "old_v" in dir() else None,
-                            new_value=float(new_v) if "new_v" in dir() else None,
+                            old_value=float(r.get("old_v")),
+                            new_value=float(r.get("new_v")),
                             diff_ratio=float(abs(mean_ratio - 1.0)),
                             decision=decision,
                             message=msg,
