@@ -71,8 +71,8 @@ class DataCalibrator:
             adjust_type: 复权类型
 
         Returns:
-            (clean_df, report)
-            - clean_df: L2 校验通过的 DataFrame（可落库）
+            (df, report)
+            - df: 全量 DataFrame（不删行，由调用方根据 has_l2_failed 决定是否过滤）
             - report: DataCalibrationReport（含违规数、差异数、决策）
         """
         from quant.storage.database import Database  # noqa: F401
@@ -83,9 +83,8 @@ class DataCalibrator:
         total = len(df)
         passed = valid_mask.sum()
 
-        df_valid = df[valid_mask]
-
-        if df_valid.empty:
+        # 不删行，直接返回全量 df
+        if l2_failed_count > 0:
             report = DataCalibrationReport(
                 symbol=symbol,
                 adjust_type=adjust_type,
@@ -95,11 +94,11 @@ class DataCalibrator:
                 issues=[CalibrationIssueDict(**i) for i in l2_issues],
                 suggestion="所有行 L2 校验失败，请检查数据源",
             )
-            return df_valid, report
+            return df, report
 
         # L3 修正校准（重叠窗口与本地对比）
         issues = list(l2_issues)
-        issues.extend(self._calibrate_overlap(df_valid, symbol, adjust_type))
+        issues.extend(self._calibrate_overlap(df, symbol, adjust_type))
 
         # 统计
         auto_corrected = sum(
@@ -118,7 +117,7 @@ class DataCalibrator:
             issues=[CalibrationIssueDict(**i) for i in issues],
             suggestion=self._make_suggestion(issues),
         )
-        return df_valid, report
+        return df, report
 
     def validate(
         self,
@@ -403,7 +402,8 @@ class DataCalibrator:
                 drift_ratios.append({"date": d, "col": col, "ratio": ratio, "old_v": old_v, "new_v": new_v})
 
         # P1-03: 漂移识别（全区间同比例系统性偏移）
-        if drift_ratios:
+        # 至少5个数据点才做漂移识别，避免统计不可靠
+        if len(drift_ratios) >= 5:
             ratios = [r["ratio"] for r in drift_ratios]
             mean_ratio = np.mean(ratios)
             std_ratio = np.std(ratios)

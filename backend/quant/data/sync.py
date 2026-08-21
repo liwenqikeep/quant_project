@@ -135,6 +135,7 @@ class DataSyncService:
         self._ensure_calendar()
 
         t_start = datetime.now()
+        report = BatchFetchReport(total=len(symbols))
 
         for symbol in symbols:
             outcome = self._sync_single(symbol, adjust, dry_run)
@@ -339,10 +340,10 @@ class DataSyncService:
                 duration_ms=duration_ms,
             )
 
-        # P1-01: calibrate 返回 (clean_df, report)
-        clean_df, calibration_report = self.calibrator.calibrate(df, symbol, adjust)
+        # P1-01: calibrate 返回 (df, report)，不删行
+        df_calibrated, calibration_report = self.calibrator.calibrate(df, symbol, adjust)
 
-        # P1-01: L2 违规整段 failed，不落库
+        # L2 违规整段 failed，不落库
         if calibration_report.has_l2_failed:
             duration_ms = int((time.time() - t0) * 1000)
             error_msg = f"L2 校验失败 {calibration_report.l2_failed_count} 行"
@@ -363,7 +364,7 @@ class DataSyncService:
 
         # P1-03: L3 校准决策，生成 upsert bars
         bars, calibration_issues = self._apply_calibration(
-            clean_df, symbol, adjust, calibration_report
+            df_calibrated, symbol, adjust, calibration_report
         )
 
         # 4. upsert（只有 bars 非空时才落库）
@@ -393,7 +394,7 @@ class DataSyncService:
             self.db.save_calibration_logs(calibration_issues)
 
         # 6. P1-02: 新鲜度检查（actual = 本次拉取最大日期）
-        actual_date = clean_df.index.max().date() if len(clean_df) else None
+        actual_date = df_calibrated.index.max().date() if len(df_calibrated) else None
         expected_date = self._resolve_target_date()
         status, message = self._check_freshness(actual_date, expected_date)
 
