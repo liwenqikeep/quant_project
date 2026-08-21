@@ -13,6 +13,7 @@ import pandas as pd
 import pytest
 
 from quant.data.base_data_source import AkshareAdapter
+from quant.data.errors import DataFetchError
 from quant.data.calibration import CalibrationConfig, DataCalibrator
 from quant.data.models import (
     AdjustType,
@@ -56,7 +57,7 @@ class TestAkshareAdapterNormalize:
     """适配器列映射与单位换算"""
 
     def test_normalize_basic(self):
-        """12列东财原始数据 → 规范列，涨跌幅/振幅/换手率转小数"""
+        """_normalize 正确映射列名 + 单位换算"""
         adapter = AkshareAdapter()
         raw = pd.DataFrame({
             "日期": pd.to_datetime(["2024-01-02", "2024-01-03"]),
@@ -75,26 +76,27 @@ class TestAkshareAdapterNormalize:
 
         df = adapter._normalize(raw)
 
+        # date 成为 index，不在 columns 中
+        assert df.index.name == "date"
         assert list(df.columns) == [
-            "date", "open", "close", "high", "low",
+            "open", "close", "high", "low",
             "volume", "amount", "amplitude", "change_pct",
             "change_amount", "turnover",
         ]
-        assert df.index.name == "date"
         # 单位换算验证
         assert abs(df.loc["2024-01-02", "amplitude"] - 0.0226) < 0.001
         assert abs(df.loc["2024-01-02", "change_pct"] - (-0.0111)) < 0.001
         assert abs(df.loc["2024-01-02", "turnover"] - 0.0025) < 0.0001
 
     def test_normalize_missing_column_raises(self):
-        """缺失原始列时报 RuntimeError"""
+        """缺失原始列时报 DataFetchError"""
         adapter = AkshareAdapter()
         raw = pd.DataFrame({
             "日期": pd.to_datetime(["2024-01-02"]),
             "开盘": [1800.0],
             # 缺失其他列
         })
-        with pytest.raises(RuntimeError, match="AKShare 返回列缺失"):
+        with pytest.raises(DataFetchError, match="AKShare 返回列缺失"):
             adapter._normalize(raw)
 
     def test_normalize_empty_df(self):
@@ -106,8 +108,10 @@ class TestAkshareAdapterNormalize:
         ])
         df = adapter._normalize(raw)
         assert df.empty
+        # date 成为 index，不在 columns 中
+        assert df.index.name == "date"
         assert list(df.columns) == [
-            "date", "open", "close", "high", "low",
+            "open", "close", "high", "low",
             "volume", "amount", "amplitude", "change_pct",
             "change_amount", "turnover",
         ]
@@ -140,8 +144,8 @@ class TestDataCalibrator:
             volumes=[10000, 11000],
             amounts=[1e6, 1.1e6],
         )
-        clean, issues = calibrator.validate(df, "600519.SH")
-        assert len(clean) == 2
+        valid_mask, issues = calibrator.validate(df, "600519.SH")
+        assert valid_mask.sum() == 2
         assert len(issues) == 0
 
     def test_validate_high_less_than_open_close(self):
@@ -156,8 +160,8 @@ class TestDataCalibrator:
             volumes=[10000],
             amounts=[1e6],
         )
-        clean, issues = calibrator.validate(df, "600519.SH")
-        assert len(clean) == 0
+        valid_mask, issues = calibrator.validate(df, "600519.SH")
+        assert valid_mask.sum() == 0
         assert len(issues) > 0
 
     def test_validate_low_greater_than_open_close(self):
@@ -172,8 +176,8 @@ class TestDataCalibrator:
             volumes=[10000],
             amounts=[1e6],
         )
-        clean, issues = calibrator.validate(df, "600519.SH")
-        assert len(clean) == 0
+        valid_mask, issues = calibrator.validate(df, "600519.SH")
+        assert valid_mask.sum() == 0
 
     def test_validate_zero_amplitude_legitimate(self):
         """一字板 amplitude=0 属合法，不得误删"""
@@ -187,10 +191,11 @@ class TestDataCalibrator:
             volumes=[0.0],
             amounts=[0.0],
         )
-        clean, issues = calibrator.validate(df, "600519.SH")
+        valid_mask, issues = calibrator.validate(df, "600519.SH")
         # 一字板：high == low == open == close，合法
         # 但 volume/amount=0 也合法
         assert len(issues) == 0
+        assert valid_mask.sum() == 1
 
     def test_validate_negative_volume_rejected(self):
         """负 volume 被拦截"""
@@ -204,8 +209,8 @@ class TestDataCalibrator:
             volumes=[-100.0],  # 非法
             amounts=[1e6],
         )
-        clean, issues = calibrator.validate(df, "600519.SH")
-        assert len(clean) == 0
+        valid_mask, issues = calibrator.validate(df, "600519.SH")
+        assert valid_mask.sum() == 0
         assert any(i["field"] == "volume" for i in issues)
 
     def test_calibrate_full_flow(self):
@@ -220,10 +225,11 @@ class TestDataCalibrator:
             volumes=[10000, 11000],
             amounts=[1e6, 1.1e6],
         )
-        report = calibrator.calibrate(df, "600519.SH", "qfq")
+        clean_df, report = calibrator.calibrate(df, "600519.SH", "qfq")
         assert report.total_rows == 2
         assert report.passed == 2
         assert isinstance(report, DataCalibrationReport)
+        assert len(clean_df) == 2  # validate 返回 valid_mask，calibrate 应用 mask 后返回 df
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +247,7 @@ class TestModels:
         assert FetchStatus.EMPTY.value == "empty"
         assert FetchStatus.STALE.value == "stale"
         assert FetchStatus.SKIPPED.value == "skipped"
+        assert FetchStatus.DRY_RUN.value == "dry_run"
 
     def test_adjust_type_values(self):
         """AdjustType 枚举值正确"""

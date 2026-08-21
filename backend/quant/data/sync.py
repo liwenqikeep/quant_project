@@ -155,6 +155,8 @@ class DataSyncService:
                 report.stale_symbols.append(outcome)
             elif outcome.status == FetchStatus.SKIPPED:
                 report.skipped += 1
+            elif outcome.status == FetchStatus.DRY_RUN:
+                report.skipped += 1  # dry_run 不计入真实 skipped
 
             # 礼貌限流
             if not dry_run:
@@ -267,7 +269,7 @@ class DataSyncService:
             return FetchOutcome(
                 symbol=symbol,
                 adjust_type=adjust,
-                status=FetchStatus.SKIPPED,
+                status=FetchStatus.DRY_RUN,
                 start_date=self._parse_date(start_str),
                 end_date=self._parse_date(end_str),
                 duration_ms=duration_ms,

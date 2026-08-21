@@ -75,27 +75,25 @@ class TradingCalendar:
             logger.error(f"保存日历失败: {e}")
     
     def _generate_default_calendar(self):
-        """生成默认日历（2020-2025年）"""
-        start_year = 2020
-        end_year = 2025
+        """生成默认日历（优先从 akshare 获取，失败时使用保守降级）"""
+        # 优先尝试从 akshare 获取真实日历
+        if AKSHARE_AVAILABLE:
+            try:
+                df = ak.tool_trade_date_hist_sina()
+                self.trading_days = []
+                for _, row in df.iterrows():
+                    trade_date = row["trade_date"]
+                    if isinstance(trade_date, str):
+                        self.trading_days.append(date.fromisoformat(trade_date.replace("/", "-")))
+                self._save_calendar()
+                logger.info(f"已从 akshare 获取日历: {len(self.trading_days)} 个交易日")
+                return
+            except Exception as e:
+                logger.warning(f"从 akshare 获取日历失败，使用保守降级: {e}")
         
-        # A股主要节假日（简化版，实际应从数据源获取）
-        public_holidays = {
-            # 元旦
-            (1, 1): "元旦",
-            # 春节（每年变化，需要手动设置）
-            # 清明节
-            (4, 4): "清明节", (4, 5): "清明节", (4, 6): "清明节",
-            # 劳动节
-            (5, 1): "劳动节", (5, 2): "劳动节", (5, 3): "劳动节",
-            # 端午节
-            (6, 22): "端午节", (6, 23): "端午节", (6, 24): "端午节",
-            # 中秋节（每年变化）
-            (9, 18): "中秋节", (9, 19): "中秋节", (9, 20): "中秋节",
-            # 国庆节
-            (10, 1): "国庆节", (10, 2): "国庆节", (10, 3): "国庆节",
-            (10, 4): "国庆节", (10, 5): "国庆节", (10, 6): "国庆节", (10, 7): "国庆节",
-        }
+        # 降级：所有工作日作为交易日（节假日由用户手动配置）
+        start_year = date.today().year - 1
+        end_year = date.today().year + 1
         
         self.trading_days = []
         self.holidays = {}
@@ -110,14 +108,9 @@ class TradingCalendar:
                     
                     # 只处理工作日（周一到周五）
                     if d.weekday() < 5:
-                        # 检查是否节假日
-                        holiday_name = public_holidays.get((month, day))
-                        if holiday_name:
-                            self.holidays[d] = holiday_name
-                        else:
-                            self.trading_days.append(d)
+                        self.trading_days.append(d)
         
-        logger.info(f"已生成默认日历: {len(self.trading_days)} 个交易日")
+        logger.warning(f"已生成保守日历（所有工作日）: {len(self.trading_days)} 个交易日，节假日由用户手动配置")
     
     def update_calendar(self, start_date: str = None, end_date: str = None):
         """从数据源更新日历"""

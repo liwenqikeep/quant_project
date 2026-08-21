@@ -49,7 +49,7 @@ class DataCalibrator:
     """
     数据校准器
 
-    L2 硬校验：OHLC 关系、价格 > 0、volume/amount 非负、日期唯一且为交易日。
+    L2 硬校验：OHLC 关系、价格 > 0、volume/amount 非负、日期唯一。
     L3 修正校准：重叠窗口与本地对比、复权漂移识别、决策矩阵。
     """
 
@@ -78,10 +78,12 @@ class DataCalibrator:
         from quant.storage.database import Database  # noqa: F401
 
         # L2 硬校验
-        df_valid, l2_issues = self.validate(df, symbol)
+        valid_mask, l2_issues = self.validate(df, symbol)
         l2_failed_count = len(l2_issues)
         total = len(df)
-        passed = len(df_valid)
+        passed = valid_mask.sum()
+
+        df_valid = df[valid_mask]
 
         if df_valid.empty:
             report = DataCalibrationReport(
@@ -122,17 +124,18 @@ class DataCalibrator:
         self,
         df: pd.DataFrame,
         symbol: str,
-    ) -> tuple[pd.DataFrame, list[CalibrationIssue]]:
+    ) -> tuple[pd.Series, list[CalibrationIssue]]:
         """
-        L2 硬校验
+        L2 硬校验（不删行）
 
         Args:
             df: 待校验 DataFrame
             symbol: 标的代码
 
         Returns:
-            (clean_df, issues)
-            issues 记录违规行（不落库）
+            (valid_mask, issues)
+            - valid_mask: 布尔 Series，True 表示该行通过校验
+            - issues: 记录违规行（不落库）
         """
         issues: list[CalibrationIssue] = []
         df = df.copy()
@@ -144,7 +147,7 @@ class DataCalibrator:
             d = idx.date() if hasattr(idx, "date") else idx
             dates.append(d)
 
-        # P1-01: 日期去重校验
+        # 日期去重校验
         seen: set = set()
         dup_dates: list = []
         for d in dates:
@@ -167,45 +170,34 @@ class DataCalibrator:
                 )
             )
 
-        # P1-01: 非交易日校验（停牌日无行属正常，此处只检查日期是否在日历中）
+        # 非交易日校验降级为 WARN（停牌日无行属正常，不误判为 failed）
         from quant.utils.calendar import get_calendar
 
         cal = get_calendar()
         non_trading_dates = []
-        # 对所有日期（非重复）检查是否为交易日
         all_dates = set(dates)
         for d in all_dates:
             if cal.trading_days and d not in set(cal.trading_days):
                 non_trading_dates.append(d)
-        for d in non_trading_dates:
-            issues.append(
-                CalibrationIssue(
-                    symbol=symbol,
-                    trade_date=d,
-                    adjust_type="",
-                    field="trade_date",
-                    old_value=None,
-                    new_value=None,
-                    diff_ratio=None,
-                    decision="failed",
-                    message=f"非交易日: {d}",
-                    checked_at=now,
-                )
-            )
+        if non_trading_dates:
+            logger.warning(f"发现 {len(non_trading_dates)} 个非交易日日期，可能为停牌日：{non_trading_dates[:5]}")
 
-        # OHLC 关系校验
-        for idx, row in df.iterrows():
+        # OHLC 关系校验（向量化 + 逐行记录违规）
+        # 向量化：一次计算所有违规行
+        price_cols_data = df[["open", "close", "high", "low"]].astype(float)
+        o = price_cols_data["open"]
+        c = price_cols_data["close"]
+        h = price_cols_data["high"]
+        l_ = price_cols_data["low"]
+
+        # 价格列 <= 0
+        price_invalid = (price_cols_data <= 0).any(axis=1)
+        for idx in df.index[price_invalid]:
             trade_date = idx.date() if hasattr(idx, "date") else idx
-            o = row.get("open", np.nan)
-            h = row.get("high", np.nan)
-            l_ = row.get("low", np.nan)
-            c = row.get("close", np.nan)
-            vol = row.get("volume", np.nan)
-            amt = row.get("amount", np.nan)
-
-            # 价格列 > 0
-            for col, val in [("open", o), ("close", c), ("high", h), ("low", l_)]:
-                if not (isinstance(val, float) and val > 0):
+            row = df.loc[idx]
+            for col in ["open", "close", "high", "low"]:
+                val = row.get(col, np.nan)
+                if isinstance(val, (int, float)) and val <= 0:
                     issues.append(
                         CalibrationIssue(
                             symbol=symbol,
@@ -213,7 +205,7 @@ class DataCalibrator:
                             adjust_type="",
                             field=col,
                             old_value=None,
-                            new_value=float(val) if isinstance(val, (int, float)) else None,
+                            new_value=float(val),
                             diff_ratio=None,
                             decision="failed",
                             message=f"{col}={val} 非法（须 > 0）",
@@ -221,45 +213,55 @@ class DataCalibrator:
                         )
                     )
 
-            # high >= max(open, close)
-            if isinstance(h, float) and isinstance(o, float) and isinstance(c, float):
-                if not (h >= max(o, c) - 1e-9):
-                    issues.append(
-                        CalibrationIssue(
-                            symbol=symbol,
-                            trade_date=trade_date,
-                            adjust_type="",
-                            field="high",
-                            old_value=float(h),
-                            new_value=None,
-                            diff_ratio=None,
-                            decision="failed",
-                            message=f"high({h:.2f}) < max(open({o:.2f}), close({c:.2f}))",
-                            checked_at=now,
-                        )
-                    )
+        # high < max(open, close) 容忍度 1e-6
+        high_invalid = h < np.maximum(o, c) - 1e-6
+        for idx in df.index[high_invalid]:
+            trade_date = idx.date() if hasattr(idx, "date") else idx
+            row = df.loc[idx]
+            issues.append(
+                CalibrationIssue(
+                    symbol=symbol,
+                    trade_date=trade_date,
+                    adjust_type="",
+                    field="high",
+                    old_value=float(row["high"]),
+                    new_value=None,
+                    diff_ratio=None,
+                    decision="failed",
+                    message=f"high({row['high']:.2f}) < max(open({row['open']:.2f}), close({row['close']:.2f}))",
+                    checked_at=now,
+                )
+            )
 
-            # low <= min(open, close)
-            if isinstance(l_, float) and isinstance(o, float) and isinstance(c, float):
-                if not (l_ <= min(o, c) + 1e-9):
-                    issues.append(
-                        CalibrationIssue(
-                            symbol=symbol,
-                            trade_date=trade_date,
-                            adjust_type="",
-                            field="low",
-                            old_value=float(l_),
-                            new_value=None,
-                            diff_ratio=None,
-                            decision="failed",
-                            message=f"low({l_:.2f}) > min(open({o:.2f}), close({c:.2f}))",
-                            checked_at=now,
-                        )
-                    )
+        # low > min(open, close) 容忍度 1e-6
+        low_invalid = l_ > np.minimum(o, c) + 1e-6
+        for idx in df.index[low_invalid]:
+            trade_date = idx.date() if hasattr(idx, "date") else idx
+            row = df.loc[idx]
+            issues.append(
+                CalibrationIssue(
+                    symbol=symbol,
+                    trade_date=trade_date,
+                    adjust_type="",
+                    field="low",
+                    old_value=None,
+                    new_value=float(row["low"]),
+                    diff_ratio=None,
+                    decision="failed",
+                    message=f"low({row['low']:.2f}) > min(open({row['open']:.2f}), close({row['close']:.2f}))",
+                    checked_at=now,
+                )
+            )
 
-            # volume/amount 非负
-            for col, val in [("volume", vol), ("amount", amt)]:
-                if isinstance(val, float) and val < 0:
+        # volume/amount 负值
+        vol = df["volume"].astype(float)
+        amt = df["amount"].astype(float)
+        volume_invalid = (vol < 0) | (amt < 0)
+        for idx in df.index[volume_invalid]:
+            trade_date = idx.date() if hasattr(idx, "date") else idx
+            row = df.loc[idx]
+            for col, val in [("volume", row["volume"]), ("amount", row["amount"])]:
+                if isinstance(val, (int, float)) and val < 0:
                     issues.append(
                         CalibrationIssue(
                             symbol=symbol,
@@ -275,20 +277,14 @@ class DataCalibrator:
                         )
                     )
 
-        # 过滤违规行（日期去重 + OHLC）
+        # 构建 valid_mask（不删行）
         failed_dates = {issue["trade_date"] for issue in issues if issue["decision"] == "failed"}
-        clean_dates = [d for d in dates if d not in failed_dates]
-        df_clean = df.loc[df.index[: len(clean_dates)]]  # 保留对应行
-
-        # 用日期集合重新过滤
-        date_set = set(clean_dates)
-        mask = pd.Series([d in date_set for d in dates], index=df.index)
-        df_clean = df[mask]
+        valid_mask = pd.Series([d not in failed_dates for d in dates], index=df.index)
 
         if issues:
-            logger.warning(f"L2 校验发现 {len(issues)} 个违规，剔除 {len(failed_dates)} 行")
+            logger.warning(f"L2 校验发现 {len(issues)} 个违规，失败日期 {len(failed_dates)} 个")
 
-        return df_clean, issues
+        return valid_mask, issues
 
     def _calibrate_overlap(
         self,
@@ -337,8 +333,8 @@ class DataCalibrator:
                 )
             return issues
 
-        # index 可能已是 date 列
-        if "trade_date" in df_local.columns:
+        # index 可能已是 date 列，避免重复设索引产生 MultiIndex
+        if "trade_date" in df_local.columns and df_local.index.name != "trade_date":
             df_local = df_local.set_index("trade_date")
         local_dates = set(df_local.index)
 

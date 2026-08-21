@@ -120,8 +120,13 @@ class DataFetcher:
                     )
                 logger.info(f"成功获取 {symbol} 数据，共 {len(df)} 条记录")
                 return df
-            except DataFetchError:
-                raise
+            except DataFetchError as e:
+                # DataFetchError 进入重试逻辑（区分可重试/不可重试子类）
+                last_error = e
+                logger.warning(f"获取 {symbol} 数据失败 (尝试 {attempt + 1}/{retry}): {e}")
+                if attempt < retry - 1:
+                    import time
+                    time.sleep(1 * (attempt + 1))  # 指数退避
             except Exception as e:
                 last_error = e
                 logger.warning(f"获取 {symbol} 数据失败 (尝试 {attempt + 1}/{retry}): {e}")

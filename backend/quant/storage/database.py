@@ -605,6 +605,7 @@ class Database:
             index=trade_date（date 类型），按日期升序
         """
         if self.simple_db:
+            logger.warning("SimpleDatabase 不支持 get_stock_daily，返回空 DataFrame")
             return pd.DataFrame()
 
         session = self.get_session()

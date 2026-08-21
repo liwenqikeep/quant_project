@@ -123,7 +123,9 @@ class DataProcessor:
         """
         df = df.copy()
         
-        # 量比
+        # 量比（内部自检 VOL_MA5，不依赖外部计算）
+        if "VOL_MA5" not in df.columns:
+            df["VOL_MA5"] = df["volume"].rolling(window=5).mean()
         df["vol_ratio"] = df["volume"] / df["VOL_MA5"]
         
         # 成交额变化
@@ -139,37 +141,34 @@ class DataProcessor:
         """
         数据清洗（不破坏时间序列）
         
+        仅做列级非法值过滤（价格 <= 0 -> NaN，成交量 < 0 -> NaN），
+        不删除任何时间序列行，保持日期索引连续性。
+        
         Args:
             df: 原始 DataFrame
         
         Returns:
-            清洗后的 DataFrame
+            清洗后的 DataFrame（行数不变）
         """
         logger.info("开始数据清洗")
         
         df = df.copy()
-        initial_len = len(df)
         
-        # 处理缺失值
-        df = df.dropna()
-        logger.info(f"删除缺失值: {initial_len} -> {len(df)}")
-        
-        # 验证数据合法性（不删除行，只标记）
-        # 检查价格是否为正数
+        # 检查价格是否为正数（非法值替换为 NaN，不删行）
         if "close" in df.columns:
             invalid_close = (df["close"] <= 0) | df["close"].isna()
             if invalid_close.any():
-                logger.warning(f"发现 {invalid_close.sum()} 条非法收盘价")
-                df = df[~invalid_close]
+                logger.warning(f"发现 {invalid_close.sum()} 条非法收盘价，替换为 NaN")
+                df.loc[invalid_close, "close"] = np.nan
         
-        # 检查成交量是否为非负数
+        # 检查成交量是否为非负数（非法值替换为 NaN，不删行）
         if "volume" in df.columns:
             invalid_volume = (df["volume"] < 0) | df["volume"].isna()
             if invalid_volume.any():
-                logger.warning(f"发现 {invalid_volume.sum()} 条非法成交量")
-                df = df[~invalid_volume]
+                logger.warning(f"发现 {invalid_volume.sum()} 条非法成交量，替换为 NaN")
+                df.loc[invalid_volume, "volume"] = np.nan
         
-        logger.info(f"数据清洗完成: {initial_len} -> {len(df)}")
+        logger.info("数据清洗完成（行数不变）")
         
         return df
     
@@ -228,6 +227,8 @@ class DataProcessor:
         """
         完整的股票数据处理流程
         
+        顺序：clean -> add_indicators -> add_price_features -> add_volume_features
+        
         Args:
             df: 原始股票数据
             add_indicators: 是否添加技术指标
@@ -241,15 +242,16 @@ class DataProcessor:
         
         result = df.copy()
         
+        # 先清洗（不删行），确保后续指标计算时无非法值干扰
+        if clean:
+            result = self.clean_data(result)
+        
         if add_indicators:
             result = self.add_technical_indicators(result)
         
         if add_features:
             result = self.add_price_features(result)
             result = self.add_volume_features(result)
-        
-        if clean:
-            result = self.clean_data(result)
         
         logger.info(f"数据处理完成，特征数量: {len(result.columns)}")
         

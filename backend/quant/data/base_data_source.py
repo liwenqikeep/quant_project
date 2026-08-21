@@ -218,7 +218,7 @@ class AkshareAdapter(BaseDataSource):
 
 
 class TushareAdapter(BaseDataSource):
-    """Tushare 数据源适配器（规划中）"""
+    """Tushare 数据源适配器"""
 
     def __init__(self, token: str | None = None):
         self.token = token
@@ -262,7 +262,48 @@ class TushareAdapter(BaseDataSource):
             end_date=end
         )
 
-        df["date"] = pd.to_datetime(df["trade_date"])
+        return self._normalize(df)
+
+    def _normalize(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        列映射 + 单位换算
+
+        Tushare 原始列 → 规范列：
+        - trade_date → date
+        - vol → volume（手 → 手，保持单位）
+        - amount → amount（元 → 元，保持单位）
+        """
+        # 原始列名 → 规范列名映射
+        column_map = {
+            "trade_date": "date",
+            "ts_code": "symbol",
+            "open": "open",
+            "high": "high",
+            "low": "low",
+            "close": "close",
+            "vol": "volume",
+            "amount": "amount",
+            "pct_chg": "change_pct",
+            "change": "change_amount",
+            "turnover_rate": "turnover",
+        }
+
+        # 检查必要列是否存在
+        available_cols = [c for c in column_map.keys() if c in df.columns]
+        df = df[available_cols].rename(
+            columns={k: v for k, v in column_map.items() if k in df.columns}
+        )
+
+        # 单位换算：Tushare 的 pct_chg 是百分比（如 10.5 表示 10.5%）
+        if "change_pct" in df.columns:
+            df["change_pct"] = df["change_pct"] / 100.0
+
+        # 单位换算：Tushare 的 turnover_rate 是比率（如 0.05 表示 5%）
+        if "turnover" in df.columns:
+            df["turnover"] = df["turnover"] / 100.0 if df["turnover"].max() > 1 else df["turnover"]
+
+        # 日期处理
+        df["date"] = pd.to_datetime(df["date"]).dt.normalize()
         df.set_index("date", inplace=True)
         df.sort_index(inplace=True)
 

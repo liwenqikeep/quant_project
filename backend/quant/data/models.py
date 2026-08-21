@@ -27,6 +27,7 @@ class FetchStatus(str, Enum):
     EMPTY = "empty"  # 数据源无该区间数据
     STALE = "stale"  # 数据源未发布期望交易日数据
     SKIPPED = "skipped"  # 断点已覆盖目标区间，无需拉取
+    DRY_RUN = "dry_run"  # dry_run 模式，仅打印计划区间
 
 
 class CalibrationDecision(str, Enum):
